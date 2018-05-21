@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+
 """ Subscribe to NAO's mic audio
 
 """
@@ -6,6 +6,8 @@ from __future__ import print_function
 import time
 import sys
 import Queue
+import requests
+import json
 
 from naoqi import ALProxy
 from naoqi import ALBroker
@@ -21,10 +23,16 @@ from google.cloud.speech import enums
 from google.cloud.speech import types
 from google.rpc import code_pb2
 
-NAO_IP = "192.168.0.102"
+NAO_IP = "192.168.1.102"
+CONVERSA_URL = 'https://conversa.btgapps.com/btgchatbot/chatbotinterface'
+# CONVERSA_DATA = {'instance':'8d915330-bf87-46a0-9e4e-55d6f905bf41', 'message':'what is msme', 'type':'text', 'source':'Web', 'platform':'Chrome', 'locale':'en_US', 'userToken':'1523888357852'}
+CONVERSA_DATA = {'instance':'5b945e64-a149-4d80-8c6a-ea178cf8a9c5', 'message':'what is msme', 'type':'text', 'source':'Web', 'platform':'Chrome', 'locale':'en_US', 'userToken':'9999888357852'}
 
+tts = ALProxy("ALTextToSpeech", NAO_IP, 9559)
 audioStreamer = None
 audio_buffer = Queue.Queue()
+stt = None
+
 
 class GoogleSTTClient(object):
     def __init__(self, sample_rate, credentials_json, recognized_cb):
@@ -38,6 +46,7 @@ class GoogleSTTClient(object):
         self.running = False
         self.buffer = Queue.Queue()
         self.restart_flag = False
+        self.block_transcription = False
 
         self.stream_thread = Thread(target=self.stream)
         self.stream_thread.start()
@@ -100,6 +109,9 @@ class GoogleSTTClient(object):
 
             yield b''.join(data)
 
+    def pause(self, flag):
+        self.block_transcription = flag
+
     def listen_print_loop(self, responses):
         """Iterates through server responses and prints them.
 
@@ -147,6 +159,9 @@ class GoogleSTTClient(object):
             # some extra spaces to overwrite the previous result
             overwrite_chars = ' ' * (num_chars_printed - len(transcript))
 
+            if self.block_transcription:
+                continue
+
             if not result.is_final:
                 sys.stdout.write(transcript + overwrite_chars + '\r')
                 sys.stdout.flush()
@@ -155,7 +170,7 @@ class GoogleSTTClient(object):
 
             else:
                 #print(transcript + overwrite_chars)
-                self.recognized_cb(transcript, 'google')
+                self.recognized_cb(transcript)
 
                 # Exit recognition if any of the transcribed phrases could be
                 # one of our keywords.
@@ -178,6 +193,7 @@ class AudioStreamerModule(ALModule):
         ALModule.__init__(self, name)
         # Create a proxy to ALAudioDevice
         self.audio_buffer = buffer
+        self.is_speaking = False
         try :
             self.audioDevice = ALProxy("ALAudioDevice")
         except Exception as e:
@@ -196,8 +212,12 @@ class AudioStreamerModule(ALModule):
         print ("process called,  {} channels with {} samples each - {}".format(channels, samplesPerChannel, len(buffer)))
 
     def processRemote(self, channels, samplesPerChannel, timestamp, buffer):
+        # if not self.is_speaking:
         self.audio_buffer.put(buffer, block=False)
         # print("process remote called, channels = {}, samples per channel = {}, sample len = {}, buffer len = {}...".format(channels, samplesPerChannel, len(buffer), self.audio_buffer.qsize()))
+
+    def setSpeaking(self, flag=True):
+        self.is_speaking = flag
 
     def stop(self):
         """unsubscribe
@@ -233,7 +253,44 @@ def data_generator(buffer):
         yield b''.join(data)
 
 def transcription_cb(transcription):
-    print('Got from Google:{}'.format(transcription))
+    global NAO_IP, CONVERSA_DATA, CONVERSA_URL, tts, audioStreamer, stt
+
+    if not transcription:
+        tts.say('Sorry I did not get that, Could you try again')
+        return
+
+    data = dict(CONVERSA_DATA)
+    data['message'] = transcription
+
+    print('\nSTT - {}\nREQ - {}'.format(transcription, data))
+
+    try:
+        r = requests.post(CONVERSA_URL, json.dumps(data))
+    except Exception as e:
+        print ("Is the internet working? - {}".format(e))
+        return
+
+    response = json.loads(r.text)
+    if 'status' in response and response['status'] == 'error':
+        to_say = 'Sorry I did not get that, Could you try again'
+    print ('RESPONSE - {}'.format(response))
+    for resp in response['responses']:
+        # print (resp)
+        if resp['status'] == 'success':
+            if 'responseText' in resp:
+                to_say = resp['responseText']
+            elif 'hintText' in resp:
+                to_say = resp['hintText']
+            else:
+                to_say = "Something went wrong with the server response, please consult my buddies at the Innovation Lab"
+            break
+        else:
+            to_say = 'Sorry I did not get that, Could you try again'
+    # audioStreamer.setSpeaking(True)
+    stt.pause(True)
+    tts.say(str(to_say))
+    stt.pause(False)
+    # audioStreamer.setSpeaking(False)
 
 def main():
     """ Main entry point
@@ -252,7 +309,8 @@ def main():
         pport=9559)
 
     # Start Google cloud stt
-    credentials_json = '/home/cbarobotics/dev/catkin_ws/src/stt/credentials/google.json'
+    global stt
+    credentials_json = '/home/cbarobotics/job/nao/tcs-stt.json'
     stt = GoogleSTTClient(48000, credentials_json, transcription_cb)
 
     (opts, args_) = parser.parse_args()
@@ -286,7 +344,7 @@ def main():
         audioStreamer.stop()
         myBroker.shutdown()
         stt.shutdown()
-        exit()
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
