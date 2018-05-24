@@ -23,7 +23,7 @@ from google.cloud.speech import enums
 from google.cloud.speech import types
 from google.rpc import code_pb2
 
-NAO_IP = "192.168.1.102"
+NAO_IP = "192.168.1.103"
 CONVERSA_URL = 'https://conversa.btgapps.com/btgchatbot/chatbotinterface'
 # CONVERSA_DATA = {'instance':'8d915330-bf87-46a0-9e4e-55d6f905bf41', 'message':'what is msme', 'type':'text', 'source':'Web', 'platform':'Chrome', 'locale':'en_US', 'userToken':'1523888357852'}
 CONVERSA_DATA = {'instance':'5b945e64-a149-4d80-8c6a-ea178cf8a9c5', 'message':'what is msme', 'type':'text', 'source':'Web', 'platform':'Chrome', 'locale':'en_US', 'userToken':'9999888357852'}
@@ -261,6 +261,9 @@ def transcription_cb(transcription):
 
     data = dict(CONVERSA_DATA)
     data['message'] = transcription
+
+    if transcription in ['shut up', 'be quiet', 'stop taklking', 'quiet']:
+        raise KeyboardInterrupt
 
     print('\nSTT - {}\nREQ - {}'.format(transcription, data))
 
